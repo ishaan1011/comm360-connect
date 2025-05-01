@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: simple-zoom-backend
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: cd server && npm install
+    startCommand: cd server && npm start
+    envVars:
+      - key: PORT
+        value: 9000
+      - key: CLIENT_URL
+        value: https://your-vercel-app-url.vercel.app
+    healthCheckPath: /api/network-test

@@ -73,6 +73,50 @@ The server will serve the static files from the client build folder.
 - **Frontend**: React, React Router, Socket.io-client, Simple-Peer, Bootstrap
 - **Backend**: Node.js, Express, Socket.io
 
+## Deployment
+
+This application is designed to be deployed with the frontend on Vercel and the backend on Render.
+
+### Deploying the Frontend to Vercel
+
+1. Sign up or log in to [Vercel](https://vercel.com/)
+2. Connect your GitHub repository or use the Vercel CLI
+3. Configure the deployment:
+   - Root directory: `client`
+   - Build command: `npm run build`
+   - Output directory: `build`
+4. Before deploying to production, update the `.env` file in the client directory:
+   ```
+   # Comment out the development URL
+   # REACT_APP_SERVER_URL=http://localhost:9000
+   # Uncomment and set the production URL to your Render backend
+   REACT_APP_SERVER_URL=https://your-render-app-name.onrender.com
+   ```
+5. Deploy the application
+
+### Deploying the Backend to Render
+
+1. Sign up or log in to [Render](https://render.com/)
+2. Create a new Web Service
+3. Connect your GitHub repository
+4. Configure the deployment:
+   - Name: `simple-zoom-backend` (or your preferred name)
+   - Root directory: `server`
+   - Runtime: `Node`
+   - Build command: `npm install`
+   - Start command: `npm start`
+5. Add environment variables:
+   - `PORT`: `9000`
+   - `CLIENT_URL`: Your Vercel frontend URL (e.g., `https://your-app.vercel.app`)
+6. Deploy the application
+
+Alternatively, you can use the included `render.yaml` file for Blueprint deployment:
+
+1. Update the `CLIENT_URL` in the `render.yaml` file with your Vercel URL
+2. Go to the Render Dashboard
+3. Click on "Blueprints"
+4. Connect your repository and deploy using the Blueprint
+
 ## License
 
 MIT
