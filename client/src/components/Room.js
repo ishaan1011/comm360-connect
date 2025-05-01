@@ -170,33 +170,33 @@ const Room = () => {
         });
         
         // Handle ICE candidates
-        socketRef.current.on('ice-candidate', ({ from, candidate }) => {
-          console.log('Received ICE candidate from:', from);
-          const item = peersRef.current.find(p => p.peerId === from);
-          if (item && item.peer) {
-            try {
-              item.peer.signal({ type: 'candidate', candidate });
-            } catch (err) {
-              console.error('Error adding ICE candidate:', err);
-            }
-          }
-        });
+        // socketRef.current.on('ice-candidate', ({ from, candidate }) => {
+        //   console.log('Received ICE candidate from:', from);
+        //   const item = peersRef.current.find(p => p.peerId === from);
+        //   if (item && item.peer) {
+        //     try {
+        //       item.peer.signal({ type: 'candidate', candidate });
+        //     } catch (err) {
+        //       console.error('Error adding ICE candidate:', err);
+        //     }
+        //   }
+        // });
         
         // Also handle broadcast ICE candidates as fallback
-        socketRef.current.on('ice-candidate-broadcast', ({ from, candidate }) => {
-          console.log('Received broadcast ICE candidate from:', from);
-          // Skip if it's from ourselves
-          if (from === userId.current) return;
+        // socketRef.current.on('ice-candidate-broadcast', ({ from, candidate }) => {
+        //   console.log('Received broadcast ICE candidate from:', from);
+        //   // Skip if it's from ourselves
+        //   if (from === userId.current) return;
           
-          const item = peersRef.current.find(p => p.peerId === from);
-          if (item && item.peer) {
-            try {
-              item.peer.signal({ type: 'candidate', candidate });
-            } catch (err) {
-              console.error('Error adding broadcast ICE candidate:', err);
-            }
-          }
-        });
+        //   const item = peersRef.current.find(p => p.peerId === from);
+        //   if (item && item.peer) {
+        //     try {
+        //       item.peer.signal({ type: 'candidate', candidate });
+        //     } catch (err) {
+        //       console.error('Error adding broadcast ICE candidate:', err);
+        //     }
+        //   }
+        // });
         
         // Handle connection testing
         socketRef.current.on('user-ping', ({ from }) => {
@@ -377,14 +377,14 @@ const Room = () => {
       });
     });
     
-    peer.on('ice', candidate => {
-      console.log('Sending ICE candidate to:', userToSignal);
-      socketRef.current.emit('ice-candidate', {
-        roomId,
-        to: userToSignal,
-        candidate,
-      });
-    });
+    // peer.on('ice', candidate => {
+    //   console.log('Sending ICE candidate to:', userToSignal);
+    //   socketRef.current.emit('ice-candidate', {
+    //     roomId,
+    //     to: userToSignal,
+    //     candidate,
+    //   });
+    // });
     
     peer.on('connect', () => {
       console.log('Peer connection established with:', userToSignal);
@@ -492,13 +492,13 @@ const Room = () => {
       });
     });
     
-    peer.on('ice', candidate => {
-      socketRef.current.emit('ice-candidate', {
-        roomId,
-        to: callerID,
-        candidate,
-      });
-    });
+    // peer.on('ice', candidate => {
+    //   socketRef.current.emit('ice-candidate', {
+    //     roomId,
+    //     to: callerID,
+    //     candidate,
+    //   });
+    // });
 
     peer.signal(incomingSignal);
 
@@ -649,7 +649,7 @@ const Video = ({ peer, username }) => {
 
   return (
     <div className="video-item">
-      <video ref={ref} autoPlay playsInline controls />
+      <video ref={ref} autoPlay playsInline />
       <div className="user-name">{username}</div>
     </div>
   );
