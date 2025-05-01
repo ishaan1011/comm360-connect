@@ -1,3 +1,5 @@
+// --- Cleaned & Fixed Room.js ---
+
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button, Alert } from 'react-bootstrap';
@@ -9,7 +11,7 @@ import ChatPanel from './ChatPanel';
 const Room = () => {
   const { roomId } = useParams();
   const navigate = useNavigate();
-  
+
   const [peers, setPeers] = useState([]);
   const [stream, setStream] = useState(null);
   const [username, setUsername] = useState('');
@@ -25,538 +27,161 @@ const Room = () => {
   const userId = useRef(Math.floor(Math.random() * 1000000).toString());
 
   useEffect(() => {
-    // Get username from session storage
     const storedUsername = sessionStorage.getItem('username');
     if (!storedUsername) {
-      // Redirect to home if username is not set
       navigate('/');
       return;
     }
     setUsername(storedUsername);
 
-    // Initialize socket connection
     const serverUrl = process.env.REACT_APP_SERVER_URL || window.location.origin;
-    console.log('Connecting to socket server at:', serverUrl);
-    
-    // Set up connection with extensive options for reliability
-    socketRef.current = io.connect(serverUrl, {
-      path: '/socket.io',
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      timeout: 20000,
-      forceNew: true, // Force a new connection
-      query: { roomId } // Pass the room ID as a query parameter
-    });
-    
-    // Handle socket connection events
-    socketRef.current.on('connect', () => {
-      console.log('Connected to socket server with ID:', socketRef.current.id);
-    });
-    
-    socketRef.current.on('connect_error', (error) => {
-      console.error('Socket connection error:', error);
-    });
-    
-    socketRef.current.on('connect_timeout', () => {
-      console.error('Socket connection timeout');
-    });
-    
-    socketRef.current.on('reconnect', (attemptNumber) => {
-      console.log(`Reconnected to socket server after ${attemptNumber} attempts`);
-    });
-    
-    socketRef.current.on('reconnect_error', (error) => {
-      console.error('Socket reconnection error:', error);
-    });
-    
-    socketRef.current.on('reconnect_failed', () => {
-      console.error('Socket reconnection failed');
-    });
+    socketRef.current = io.connect(serverUrl);
 
-    // Improve WebRTC by using adapter.js to normalize browser implementations
-    // This isn't explicitly imported but could be added for even better compatibility
-    
-    // Get media stream with specific constraints for better quality/compatibility
     const constraints = {
-      video: {
-        width: { ideal: 720 },
-        height: { ideal: 480 },
-        frameRate: { ideal: 24 }
-      },
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
-      }
+      video: true,
+      audio: true
     };
-    
-    navigator.mediaDevices.getUserMedia(constraints)
-      .then(stream => {
-        setStream(stream);
-        if (userVideo.current) {
-          userVideo.current.srcObject = stream;
+
+    navigator.mediaDevices.getUserMedia(constraints).then(stream => {
+      setStream(stream);
+      if (userVideo.current) userVideo.current.srcObject = stream;
+
+      socketRef.current.emit('join-room', {
+        roomId,
+        userId: userId.current,
+        username: storedUsername
+      });
+
+      socketRef.current.on('user-connected', ({ userId, username }) => {
+        const peer = createPeer(userId, socketRef.current.id, stream);
+        peersRef.current.push({ peerId: userId, peer, username });
+        setPeers(prev => [...prev, { peerId: userId, peer, username }]);
+      });
+
+      socketRef.current.on('signal', ({ from, signal }) => {
+        const existing = peersRef.current.find(p => p.peerId === from);
+        if (existing) {
+          existing.peer.signal(signal);
+        } else {
+          const peer = addPeer(signal, from, stream);
+          peersRef.current.push({ peerId: from, peer, username: 'User' });
+          setPeers(prev => [...prev, { peerId: from, peer, username: 'User' }]);
         }
-
-        // Join the room
-        socketRef.current.emit('join-room', {
-          roomId,
-          userId: userId.current,
-          username: storedUsername
-        });
-
-        // Handle other users joining
-        socketRef.current.on('user-connected', ({ userId, username }) => {
-          console.log(`User connected: ${username} (${userId})`);
-          // Create a peer for the new user
-          const peer = createPeer(userId, socketRef.current.id, stream);
-          
-          peersRef.current.push({
-            peerId: userId,
-            peer,
-            username
-          });
-
-          setPeers(prevPeers => [...prevPeers, {
-            peerId: userId,
-            peer,
-            username
-          }]);
-        });
-
-        // Handle incoming signals
-        socketRef.current.on('signal', ({ from, signal }) => {
-          console.log('Received direct signal from:', from);
-          const item = peersRef.current.find(p => p.peerId === from);
-          if (item) {
-            try {
-              item.peer.signal(signal);
-            } catch (err) {
-              console.error('Error processing signal:', err);
-            }
-          } else {
-            console.log('Creating new peer from signal');
-            // Create a new peer if it doesn't exist yet
-            const peer = addPeer(signal, from, stream);
-            peersRef.current.push({
-              peerId: from,
-              peer,
-              username: 'User' // We don't know the username yet
-            });
-
-            setPeers(prevPeers => [...prevPeers, {
-              peerId: from,
-              peer,
-              username: 'User'
-            }]);
-          }
-        });
-        
-        // Also handle broadcast signals as fallback
-        socketRef.current.on('signal-broadcast', ({ from, signal }) => {
-          console.log('Received broadcast signal from:', from);
-          // Skip if it's from ourselves
-          if (from === userId.current) return;
-          
-          const item = peersRef.current.find(p => p.peerId === from);
-          if (item) {
-            try {
-              item.peer.signal(signal);
-            } catch (err) {
-              console.error('Error processing broadcast signal:', err);
-            }
-          }
-        });
-        
-        // Handle ICE candidates
-        // socketRef.current.on('ice-candidate', ({ from, candidate }) => {
-        //   console.log('Received ICE candidate from:', from);
-        //   const item = peersRef.current.find(p => p.peerId === from);
-        //   if (item && item.peer) {
-        //     try {
-        //       item.peer.signal({ type: 'candidate', candidate });
-        //     } catch (err) {
-        //       console.error('Error adding ICE candidate:', err);
-        //     }
-        //   }
-        // });
-        
-        // Also handle broadcast ICE candidates as fallback
-        // socketRef.current.on('ice-candidate-broadcast', ({ from, candidate }) => {
-        //   console.log('Received broadcast ICE candidate from:', from);
-        //   // Skip if it's from ourselves
-        //   if (from === userId.current) return;
-          
-        //   const item = peersRef.current.find(p => p.peerId === from);
-        //   if (item && item.peer) {
-        //     try {
-        //       item.peer.signal({ type: 'candidate', candidate });
-        //     } catch (err) {
-        //       console.error('Error adding broadcast ICE candidate:', err);
-        //     }
-        //   }
-        // });
-        
-        // Handle connection testing
-        socketRef.current.on('user-ping', ({ from }) => {
-          console.log('Received ping from:', from);
-          socketRef.current.emit('pong-user', {
-            roomId,
-            to: from
-          });
-        });
-        
-        socketRef.current.on('user-pong', ({ from }) => {
-          console.log('Received pong from:', from);
-        });
-
-        // Handle users disconnecting
-        socketRef.current.on('user-disconnected', ({ userId }) => {
-          console.log('User disconnected:', userId);
-          const peerObj = peersRef.current.find(p => p.peerId === userId);
-          if (peerObj) {
-            peerObj.peer.destroy();
-          }
-          peersRef.current = peersRef.current.filter(p => p.peerId !== userId);
-          setPeers(peers => peers.filter(p => p.peerId !== userId));
-        });
-
-        // Receive room participants
-        socketRef.current.on('room-participants', (roomParticipants) => {
-          console.log('Room participants:', roomParticipants);
-          setParticipants(roomParticipants);
-          
-          // Create peers for existing users
-          const existingUsers = roomParticipants.filter(p => p.userId !== userId.current);
-          existingUsers.forEach(({ userId: existingUserId, username }) => {
-            const peer = createPeer(existingUserId, socketRef.current.id, stream);
-            
-            peersRef.current.push({
-              peerId: existingUserId,
-              peer,
-              username
-            });
-
-            setPeers(prevPeers => [...prevPeers, {
-              peerId: existingUserId,
-              peer,
-              username
-            }]);
-          });
-        });
-
-        // Handle incoming chat messages
-        socketRef.current.on('new-message', ({ message, sender, timestamp, messageId }) => {
-          console.log(`Received chat message from ${sender}: ${message.substring(0, 20)}${message.length > 20 ? '...' : ''}`);
-          
-          setMessages(prevMessages => {
-            // Check if we already have this message by messageId
-            const isDuplicate = prevMessages.some(msg => msg.messageId === messageId);
-            
-            if (isDuplicate) {
-              return prevMessages;
-            }
-            
-            // Determine if this is a message sent by the current user
-            const isMyMessage = sender === username;
-            
-            return [...prevMessages, { 
-              text: message, 
-              sender,
-              isMe: isMyMessage,
-              timestamp: timestamp || Date.now(),
-              messageId
-            }];
-          });
-        });
-        
-        // Request message history when joining a room
-        socketRef.current.emit('get-message-history', { roomId });
-        
-        // Handle message history
-        socketRef.current.on('message-history', ({ messages: historyMessages }) => {
-          console.log(`Received message history with ${historyMessages.length} messages`);
-          
-          if (historyMessages && historyMessages.length > 0) {
-            setMessages(historyMessages.map(msg => ({
-              text: msg.message,
-              sender: msg.sender,
-              isMe: msg.sender === username,
-              timestamp: msg.timestamp
-            })));
-          }
-        });
-      })
-      .catch(error => {
-        console.error('Error accessing media devices:', error);
-        alert('Error accessing camera or microphone. Please ensure you have granted the necessary permissions.');
       });
 
-    // Cleanup on component unmount
+      socketRef.current.on('user-disconnected', ({ userId }) => {
+        const peerObj = peersRef.current.find(p => p.peerId === userId);
+        if (peerObj) peerObj.peer.destroy();
+        peersRef.current = peersRef.current.filter(p => p.peerId !== userId);
+        setPeers(peers => peers.filter(p => p.peerId !== userId));
+      });
+
+      socketRef.current.on('room-participants', (roomParticipants) => {
+        setParticipants(roomParticipants);
+        const existingUsers = roomParticipants.filter(p => p.userId !== userId.current);
+        existingUsers.forEach(({ userId: existingUserId, username }) => {
+          const peer = createPeer(existingUserId, socketRef.current.id, stream);
+          peersRef.current.push({ peerId: existingUserId, peer, username });
+          setPeers(prev => [...prev, { peerId: existingUserId, peer, username }]);
+        });
+      });
+
+      socketRef.current.on('new-message', ({ message, sender, timestamp, messageId }) => {
+        const isDuplicate = messages.some(msg => msg.messageId === messageId);
+        if (!isDuplicate) {
+          const isMyMessage = sender === username;
+          setMessages(prev => [...prev, { text: message, sender, isMe: isMyMessage, timestamp, messageId }]);
+        }
+      });
+
+    }).catch(error => {
+      console.error('Media error:', error);
+      alert('Camera/mic permission required.');
+    });
+
     return () => {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-      }
-      if (stream) {
-        stream.getTracks().forEach(track => {
-          track.stop();
-        });
-      }
-      peersRef.current.forEach(({ peer }) => {
-        peer.destroy();
-      });
+      if (socketRef.current) socketRef.current.disconnect();
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      peersRef.current.forEach(({ peer }) => peer.destroy());
     };
   }, [navigate, roomId]);
 
-  // Function to create a peer
   const createPeer = (userToSignal, callerID, stream) => {
-    console.log(`Creating peer connection to ${userToSignal}`);
-    
-    // Create a more robust peer connection with comprehensive STUN/TURN servers
     const peer = new Peer({
       initiator: true,
-      trickle: true,      // Enable trickle ICE for better connectivity
-      stream,            // Pass the media stream
-      reconnectTimer: 1000, // Reconnect faster
-      iceTransportPolicy: 'all', // Try all types of ICE candidates
-      sdpTransform: (sdp) => {
-        // Force highest audio and video bitrates for better quality
-        return sdp.replace(/a=mid:video\r\n/g, 'a=mid:video\r\nb=AS:2000\r\n');
-      },
+      trickle: true,
+      stream,
       config: {
-        iceServers: [
-          // Google's public STUN servers
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-          { urls: 'stun:stun3.l.google.com:19302' },
-          { urls: 'stun:stun4.l.google.com:19302' },
-          // Public STUN servers
-          { urls: 'stun:stun.stunprotocol.org:3478' },
-          { urls: 'stun:stun.voiparound.com' },
-          { urls: 'stun:stun.voipbuster.com' },
-          { urls: 'stun:stun.voipstunt.com' },
-          { urls: 'stun:stun.voxgratia.org' },
-          // Free TURN servers (better for NAT traversal)
-          {
-            urls: [
-              'turn:numb.viagenie.ca:3478?transport=udp',
-              'turn:numb.viagenie.ca:3478?transport=tcp'
-            ],
-            username: 'webrtc@live.com',
-            credential: 'muazkh'
-          },
-          {
-            urls: 'turn:turn.bistri.com:80',
-            username: 'homeo',
-            credential: 'homeo'
-          },
-          {
-            urls: 'turn:turn.anyfirewall.com:443?transport=tcp',
-            username: 'webrtc',
-            credential: 'webrtc'
-          },
-          // Google's free TURN server (limited capacity)
-          {
-            urls: 'turn:0.peerjs.com:3478',
-            username: 'peerjs',
-            credential: 'peerjsp'
-          }
-        ]
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
       }
     });
-
     peer.on('signal', signal => {
-      console.log('Signaling to peer:', userToSignal, 'with signal type:', signal.type);
       socketRef.current.emit('signal', {
         roomId,
         to: userToSignal,
         from: callerID,
-        signal,
+        signal
       });
     });
-    
-    // peer.on('ice', candidate => {
-    //   console.log('Sending ICE candidate to:', userToSignal);
-    //   socketRef.current.emit('ice-candidate', {
-    //     roomId,
-    //     to: userToSignal,
-    //     candidate,
-    //   });
-    // });
-    
-    peer.on('connect', () => {
-      console.log('Peer connection established with:', userToSignal);
-    });
-    
-    peer.on('error', err => {
-      console.error('Peer connection error with', userToSignal, ':', err);
-      
-      // Try to restart ICE connection after error
-      setTimeout(() => {
-        try {
-          console.log('Attempting to restart ICE connection with:', userToSignal);
-          peer._pc.restartIce();
-        } catch (e) {
-          console.error('Failed to restart ICE:', e);
-        }
-      }, 2000);
-    });
-    
-    // Check connection status and try reconnecting if needed
-    const connectionCheckInterval = setInterval(() => {
-      if (peer.destroyed) {
-        clearInterval(connectionCheckInterval);
-        return;
-      }
-      
-      if (peer._pc && peer._pc.connectionState === 'failed') {
-        console.log('Connection failed, attempting reconnection with:', userToSignal);
-        try {
-          peer._pc.restartIce();
-        } catch (e) {
-          console.error('Failed to restart ICE:', e);
-        }
-      }
-    }, 5000);
-
     return peer;
   };
 
-  // Function to handle a received signal
   const addPeer = (incomingSignal, callerID, stream) => {
-    console.log(`Adding peer connection from ${callerID}`);
-    
-    // Create a more robust peer connection with comprehensive STUN/TURN servers
     const peer = new Peer({
       initiator: false,
-      trickle: true,      // Enable trickle ICE for better connectivity
-      stream,            // Pass the media stream
-      reconnectTimer: 1000, // Reconnect faster
-      iceTransportPolicy: 'all', // Try all types of ICE candidates
-      sdpTransform: (sdp) => {
-        // Force highest audio and video bitrates for better quality
-        return sdp.replace(/a=mid:video\r\n/g, 'a=mid:video\r\nb=AS:2000\r\n');
-      },
+      trickle: true,
+      stream,
       config: {
-        iceServers: [
-          // Google's public STUN servers
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-          { urls: 'stun:stun3.l.google.com:19302' },
-          { urls: 'stun:stun4.l.google.com:19302' },
-          // Public STUN servers
-          { urls: 'stun:stun.stunprotocol.org:3478' },
-          { urls: 'stun:stun.voiparound.com' },
-          { urls: 'stun:stun.voipbuster.com' },
-          { urls: 'stun:stun.voipstunt.com' },
-          { urls: 'stun:stun.voxgratia.org' },
-          // Free TURN servers (better for NAT traversal)
-          {
-            urls: [
-              'turn:numb.viagenie.ca:3478?transport=udp',
-              'turn:numb.viagenie.ca:3478?transport=tcp'
-            ],
-            username: 'webrtc@live.com',
-            credential: 'muazkh'
-          },
-          {
-            urls: 'turn:turn.bistri.com:80',
-            username: 'homeo',
-            credential: 'homeo'
-          },
-          {
-            urls: 'turn:turn.anyfirewall.com:443?transport=tcp',
-            username: 'webrtc',
-            credential: 'webrtc'
-          },
-          // Google's free TURN server (limited capacity)
-          {
-            urls: 'turn:0.peerjs.com:3478',
-            username: 'peerjs',
-            credential: 'peerjsp'
-          }
-        ]
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
       }
     });
-
     peer.on('signal', signal => {
-      console.log('Responding to signal from:', callerID);
       socketRef.current.emit('signal', {
         roomId,
         to: callerID,
         from: socketRef.current.id,
-        signal,
+        signal
       });
     });
-    
-    // peer.on('ice', candidate => {
-    //   socketRef.current.emit('ice-candidate', {
-    //     roomId,
-    //     to: callerID,
-    //     candidate,
-    //   });
-    // });
-
     peer.signal(incomingSignal);
-
     return peer;
   };
 
-  // Toggle audio
   const toggleAudio = () => {
     if (stream) {
-      stream.getAudioTracks().forEach(track => {
-        track.enabled = !audioEnabled;
-      });
+      stream.getAudioTracks().forEach(t => t.enabled = !audioEnabled);
       setAudioEnabled(!audioEnabled);
     }
   };
 
-  // Toggle video
   const toggleVideo = () => {
     if (stream) {
-      stream.getVideoTracks().forEach(track => {
-        track.enabled = !videoEnabled;
-      });
+      stream.getVideoTracks().forEach(t => t.enabled = !videoEnabled);
       setVideoEnabled(!videoEnabled);
     }
   };
 
-  // End call and return to home
-  const endCall = () => {
-    navigate('/');
-  };
+  const endCall = () => navigate('/');
 
-  // Send a chat message
   const sendMessage = (message) => {
     if (socketRef.current) {
-      // Generate a unique message ID
       const messageId = `${socketRef.current.id}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      
       socketRef.current.emit('send-message', {
         roomId,
         message,
         sender: username,
-        messageId // Include the message ID
+        messageId
       });
-      
-      // We won't add the message to local state here anymore
-      // It will be added when we receive the confirmation via socket
     }
   };
 
-  // Copy room ID to clipboard
   const copyRoomId = () => {
     navigator.clipboard.writeText(roomId);
-    alert('Room ID copied to clipboard!'); 
+    alert('Room ID copied to clipboard!');
   };
 
   return (
     <div className="room-container">
-      {/* Room info and sharing */}
       <div className="room-info-bar">
         <div className="room-id">
           <strong>Room ID:</strong> {roomId} 
@@ -568,104 +193,56 @@ const Room = () => {
           <strong>Participants:</strong> {participants.length}
         </div>
       </div>
-      
+
       <div className="video-container">
-        {/* Local video */}
         <div className="video-item">
           <video ref={userVideo} muted autoPlay playsInline />
           <div className="user-name">{username} (You)</div>
         </div>
-        
-        {/* Remote video streams */}
-        {peers.map((peer, index) => (
-          <Video key={peer.peerId} peer={peer.peer} username={peer.username} />
+        {peers.map(p => (
+          <Video key={p.peerId} peer={p.peer} username={p.username} />
         ))}
-        
         {peers.length === 0 && (
           <div className="no-participants-message">
             <Alert variant="info">
-              You're the only one here. Share the Room ID with others to invite them to join.
+              You're the only one here. Share the Room ID with others.
             </Alert>
           </div>
         )}
       </div>
-      
-      {/* Control buttons */}
+
       <div className="controls">
-        <button 
-          className={`control-btn ${audioEnabled ? '' : 'mute'}`} 
-          onClick={toggleAudio}
-        >
+        <button className={`control-btn ${audioEnabled ? '' : 'mute'}`} onClick={toggleAudio}>
           {audioEnabled ? <FaMicrophone /> : <FaMicrophoneSlash />}
         </button>
-        
-        <button 
-          className={`control-btn ${videoEnabled ? '' : 'video-off'}`} 
-          onClick={toggleVideo}
-        >
+        <button className={`control-btn ${videoEnabled ? '' : 'video-off'}`} onClick={toggleVideo}>
           {videoEnabled ? <FaVideo /> : <FaVideoSlash />}
         </button>
-        
         <button className="control-btn end-call" onClick={endCall}>
           <FaPhoneSlash />
         </button>
-        
         <button className="control-btn" onClick={() => setChatOpen(!chatOpen)}>
           <FaComments />
         </button>
       </div>
-      
-      {/* Chat panel */}
-      <ChatPanel 
-        isOpen={chatOpen} 
-        onClose={() => setChatOpen(false)} 
-        messages={messages}
-        onSendMessage={sendMessage}
-      />
+
+      <ChatPanel isOpen={chatOpen} onClose={() => setChatOpen(false)} messages={messages} onSendMessage={sendMessage} />
     </div>
   );
 };
 
-// Video component for remote peers
 const Video = ({ peer, username }) => {
   const ref = useRef();
-
   useEffect(() => {
     peer.on('stream', stream => {
-      console.log('✅ Received stream from peer:', stream);
-      if (ref.current) {
-        ref.current.srcObject = stream;
-        ref.current.muted = false;
-        ref.current.volume = 1;
-      }
+      if (ref.current) ref.current.srcObject = stream;
     });
-  
-    peer.on('track', (track, stream) => {
-      console.log(`🔁 Track received from peer: ${track.kind}`, track);
-    });
-  
-    peer.on('error', err => {
-      console.error('Peer connection error:', err);
-    });
-  
-    peer.on('close', () => {
-      console.log('Peer connection closed');
-    });
-  }, [peer]);  
+    return () => peer.removeAllListeners('stream');
+  }, [peer]);
 
   return (
     <div className="video-item">
-      <video
-        ref={ref}
-        autoPlay
-        playsInline
-        onLoadedMetadata={() => {
-          console.log("🎥 Remote video is ready to play");
-          ref.current?.play().catch((e) => console.error("Play error:", e));
-        }}
-        style={{ backgroundColor: "black", width: "100%", maxHeight: "50vh" }}
-      />
-
+      <video ref={ref} autoPlay playsInline />
       <div className="user-name">{username}</div>
     </div>
   );
