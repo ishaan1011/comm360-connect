@@ -109,14 +109,7 @@ app.get('/api/check-room/:roomId', (req, res) => {
   return res.json({ exists: roomExists });
 });
 
-// Serve static assets in production
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../client/build')));
-  
-  app.get('*', (req, res) => {
-    res.sendFile(path.resolve(__dirname, '../client/build/index.html'));
-  });
-}
+// Do not serve frontend assets — handled by Vercel separately
 
 const PORT = process.env.PORT || 9000;
 
