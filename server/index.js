@@ -64,6 +64,7 @@ io.on('connection', (socket) => {
     // Join the room
     socket.join(roomId);
     
+    
     // Notify others in the room
     socket.to(roomId).emit('user-connected', { userId, username });
     
