@@ -17,7 +17,7 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Socket.io setup
+// Socket.io setup with ping timeout increased for better connection stability
 const io = socketIo(server, {
   cors: {
     origin: '*',
@@ -25,6 +25,12 @@ const io = socketIo(server, {
     credentials: true
   },
   // Allow long-polling to fall back if websockets don't work
+  transports: ['websocket', 'polling'],
+  pingTimeout: 60000,        // Longer ping timeout
+  pingInterval: 25000,       // More frequent pings
+  upgradeTimeout: 30000,     // Longer upgrade timeout
+  maxHttpBufferSize: 1e8,    // 100MB max buffer size for larger video packets
+  allowUpgrades: true,       // Allow transport upgrades
   transports: ['websocket', 'polling']
 });
 
@@ -121,11 +127,14 @@ io.on('connection', (socket) => {
   });
 
   // Handle chat messages
-  socket.on('send-message', ({ roomId, message, sender }) => {
+  socket.on('send-message', ({ roomId, message, sender, messageId }) => {
     console.log(`Chat message in room ${roomId} from ${sender}: ${message.substring(0, 20)}${message.length > 20 ? '...' : ''}`);
     
+    // Generate a timestamp
+    const timestamp = Date.now();
+    
     // Send to all clients in the room, including sender for confirmation
-    io.in(roomId).emit('new-message', { message, sender, timestamp: Date.now() });
+    io.in(roomId).emit('new-message', { message, sender, timestamp, messageId });
     
     // Store message in room history for late joiners
     if (!activeRooms[roomId].messages) {
@@ -137,7 +146,7 @@ io.on('connection', (socket) => {
       activeRooms[roomId].messages.shift();
     }
     
-    activeRooms[roomId].messages.push({ message, sender, timestamp: Date.now() });
+    activeRooms[roomId].messages.push({ message, sender, timestamp, messageId });
   });
   
   // Send message history to newly joined users
@@ -161,7 +170,26 @@ app.get('/api/create-room', (req, res) => {
 app.get('/api/check-room/:roomId', (req, res) => {
   const { roomId } = req.params;
   const roomExists = activeRooms[roomId] !== undefined;
-  return res.json({ exists: roomExists });
+  return res.json({ exists: roomExists, usersCount: roomExists ? activeRooms[roomId].participants.length : 0 });
+});
+
+// Connection diagnostics endpoint
+app.get('/api/network-test', (req, res) => {
+  return res.json({ success: true, timestamp: Date.now() });
+});
+
+// Room statistics endpoint
+app.get('/api/room-stats', (req, res) => {
+  const stats = {
+    activeRoomsCount: Object.keys(activeRooms).length,
+    totalParticipants: Object.values(activeRooms).reduce((acc, room) => acc + room.participants.length, 0),
+    rooms: Object.keys(activeRooms).map(id => ({
+      id,
+      participants: activeRooms[id].participants.length,
+      created: activeRooms[id].created
+    }))
+  };
+  return res.json(stats);
 });
 
 // Do not serve frontend assets — handled by Vercel separately

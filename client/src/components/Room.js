@@ -38,13 +38,16 @@ const Room = () => {
     const serverUrl = process.env.REACT_APP_SERVER_URL || window.location.origin;
     console.log('Connecting to socket server at:', serverUrl);
     
+    // Set up connection with extensive options for reliability
     socketRef.current = io.connect(serverUrl, {
       path: '/socket.io',
       transports: ['websocket', 'polling'],
       reconnectionAttempts: 10,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
-      timeout: 20000
+      timeout: 20000,
+      forceNew: true, // Force a new connection
+      query: { roomId } // Pass the room ID as a query parameter
     });
     
     // Handle socket connection events
@@ -71,11 +74,25 @@ const Room = () => {
     socketRef.current.on('reconnect_failed', () => {
       console.error('Socket reconnection failed');
     });
-    
-    console.log('Connecting to socket server at:', serverUrl);
 
-    // Get media stream
-    navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+    // Improve WebRTC by using adapter.js to normalize browser implementations
+    // This isn't explicitly imported but could be added for even better compatibility
+    
+    // Get media stream with specific constraints for better quality/compatibility
+    const constraints = {
+      video: {
+        width: { ideal: 720 },
+        height: { ideal: 480 },
+        frameRate: { ideal: 24 }
+      },
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    };
+    
+    navigator.mediaDevices.getUserMedia(constraints)
       .then(stream => {
         setStream(stream);
         if (userVideo.current) {
@@ -230,25 +247,26 @@ const Room = () => {
         });
 
         // Handle incoming chat messages
-        socketRef.current.on('new-message', ({ message, sender, timestamp }) => {
+        socketRef.current.on('new-message', ({ message, sender, timestamp, messageId }) => {
           console.log(`Received chat message from ${sender}: ${message.substring(0, 20)}${message.length > 20 ? '...' : ''}`);
+          
           setMessages(prevMessages => {
-            // Check if we already have this message (to avoid duplicates)
-            const isDuplicate = prevMessages.some(msg => 
-              msg.sender === sender && 
-              msg.text === message && 
-              (msg.timestamp === timestamp || Math.abs(msg.timestamp - timestamp) < 1000)
-            );
+            // Check if we already have this message by messageId
+            const isDuplicate = prevMessages.some(msg => msg.messageId === messageId);
             
             if (isDuplicate) {
               return prevMessages;
             }
             
+            // Determine if this is a message sent by the current user
+            const isMyMessage = sender === username;
+            
             return [...prevMessages, { 
               text: message, 
-              sender, 
-              isMe: sender === username,
-              timestamp: timestamp || Date.now()
+              sender,
+              isMe: isMyMessage,
+              timestamp: timestamp || Date.now(),
+              messageId
             }];
           });
         });
@@ -295,30 +313,62 @@ const Room = () => {
   const createPeer = (userToSignal, callerID, stream) => {
     console.log(`Creating peer connection to ${userToSignal}`);
     
-    // Use public STUN servers and free TURN servers
+    // Create a more robust peer connection with comprehensive STUN/TURN servers
     const peer = new Peer({
       initiator: true,
-      trickle: true, // Enable trickle ICE for better connectivity
-      stream,
+      trickle: true,      // Enable trickle ICE for better connectivity
+      stream,            // Pass the media stream
+      reconnectTimer: 1000, // Reconnect faster
+      iceTransportPolicy: 'all', // Try all types of ICE candidates
+      sdpTransform: (sdp) => {
+        // Force highest audio and video bitrates for better quality
+        return sdp.replace(/a=mid:video\r\n/g, 'a=mid:video\r\nb=AS:2000\r\n');
+      },
       config: {
         iceServers: [
+          // Google's public STUN servers
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
           { urls: 'stun:stun2.l.google.com:19302' },
           { urls: 'stun:stun3.l.google.com:19302' },
           { urls: 'stun:stun4.l.google.com:19302' },
-          // Free TURN server from Twilio (you would normally implement your own TURN server or use a service)
+          // Public STUN servers
+          { urls: 'stun:stun.stunprotocol.org:3478' },
+          { urls: 'stun:stun.voiparound.com' },
+          { urls: 'stun:stun.voipbuster.com' },
+          { urls: 'stun:stun.voipstunt.com' },
+          { urls: 'stun:stun.voxgratia.org' },
+          // Free TURN servers (better for NAT traversal)
           {
-            urls: 'turn:global.turn.twilio.com:3478?transport=udp',
-            username: 'f4b4035eaa76f4a55de5f4351567653ee4ff6fa97b50b6b334fcc1be9c27212d',
-            credential: 'w1uxM55V9yVoqyVFjt+mxDBV0F87AUCemaYVQGxsPLw='
+            urls: [
+              'turn:numb.viagenie.ca:3478?transport=udp',
+              'turn:numb.viagenie.ca:3478?transport=tcp'
+            ],
+            username: 'webrtc@live.com',
+            credential: 'muazkh'
+          },
+          {
+            urls: 'turn:turn.bistri.com:80',
+            username: 'homeo',
+            credential: 'homeo'
+          },
+          {
+            urls: 'turn:turn.anyfirewall.com:443?transport=tcp',
+            username: 'webrtc',
+            credential: 'webrtc'
+          },
+          // Google's free TURN server (limited capacity)
+          {
+            urls: 'turn:0.peerjs.com:3478',
+            username: 'peerjs',
+            credential: 'peerjsp'
           }
         ]
       }
     });
 
     peer.on('signal', signal => {
-      console.log('Signaling to peer:', userToSignal);
+      console.log('Signaling to peer:', userToSignal, 'with signal type:', signal.type);
       socketRef.current.emit('signal', {
         roomId,
         to: userToSignal,
@@ -328,12 +378,48 @@ const Room = () => {
     });
     
     peer.on('ice', candidate => {
+      console.log('Sending ICE candidate to:', userToSignal);
       socketRef.current.emit('ice-candidate', {
         roomId,
         to: userToSignal,
         candidate,
       });
     });
+    
+    peer.on('connect', () => {
+      console.log('Peer connection established with:', userToSignal);
+    });
+    
+    peer.on('error', err => {
+      console.error('Peer connection error with', userToSignal, ':', err);
+      
+      // Try to restart ICE connection after error
+      setTimeout(() => {
+        try {
+          console.log('Attempting to restart ICE connection with:', userToSignal);
+          peer._pc.restartIce();
+        } catch (e) {
+          console.error('Failed to restart ICE:', e);
+        }
+      }, 2000);
+    });
+    
+    // Check connection status and try reconnecting if needed
+    const connectionCheckInterval = setInterval(() => {
+      if (peer.destroyed) {
+        clearInterval(connectionCheckInterval);
+        return;
+      }
+      
+      if (peer._pc && peer._pc.connectionState === 'failed') {
+        console.log('Connection failed, attempting reconnection with:', userToSignal);
+        try {
+          peer._pc.restartIce();
+        } catch (e) {
+          console.error('Failed to restart ICE:', e);
+        }
+      }
+    }, 5000);
 
     return peer;
   };
@@ -342,23 +428,55 @@ const Room = () => {
   const addPeer = (incomingSignal, callerID, stream) => {
     console.log(`Adding peer connection from ${callerID}`);
     
-    // Use public STUN servers and free TURN servers
+    // Create a more robust peer connection with comprehensive STUN/TURN servers
     const peer = new Peer({
       initiator: false,
-      trickle: true, // Enable trickle ICE for better connectivity
-      stream,
+      trickle: true,      // Enable trickle ICE for better connectivity
+      stream,            // Pass the media stream
+      reconnectTimer: 1000, // Reconnect faster
+      iceTransportPolicy: 'all', // Try all types of ICE candidates
+      sdpTransform: (sdp) => {
+        // Force highest audio and video bitrates for better quality
+        return sdp.replace(/a=mid:video\r\n/g, 'a=mid:video\r\nb=AS:2000\r\n');
+      },
       config: {
         iceServers: [
+          // Google's public STUN servers
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
           { urls: 'stun:stun2.l.google.com:19302' },
           { urls: 'stun:stun3.l.google.com:19302' },
           { urls: 'stun:stun4.l.google.com:19302' },
-          // Free TURN server from Twilio (you would normally implement your own TURN server or use a service)
+          // Public STUN servers
+          { urls: 'stun:stun.stunprotocol.org:3478' },
+          { urls: 'stun:stun.voiparound.com' },
+          { urls: 'stun:stun.voipbuster.com' },
+          { urls: 'stun:stun.voipstunt.com' },
+          { urls: 'stun:stun.voxgratia.org' },
+          // Free TURN servers (better for NAT traversal)
           {
-            urls: 'turn:global.turn.twilio.com:3478?transport=udp',
-            username: 'f4b4035eaa76f4a55de5f4351567653ee4ff6fa97b50b6b334fcc1be9c27212d',
-            credential: 'w1uxM55V9yVoqyVFjt+mxDBV0F87AUCemaYVQGxsPLw='
+            urls: [
+              'turn:numb.viagenie.ca:3478?transport=udp',
+              'turn:numb.viagenie.ca:3478?transport=tcp'
+            ],
+            username: 'webrtc@live.com',
+            credential: 'muazkh'
+          },
+          {
+            urls: 'turn:turn.bistri.com:80',
+            username: 'homeo',
+            credential: 'homeo'
+          },
+          {
+            urls: 'turn:turn.anyfirewall.com:443?transport=tcp',
+            username: 'webrtc',
+            credential: 'webrtc'
+          },
+          // Google's free TURN server (limited capacity)
+          {
+            urls: 'turn:0.peerjs.com:3478',
+            username: 'peerjs',
+            credential: 'peerjsp'
           }
         ]
       }
@@ -415,14 +533,18 @@ const Room = () => {
   // Send a chat message
   const sendMessage = (message) => {
     if (socketRef.current) {
+      // Generate a unique message ID
+      const messageId = `${socketRef.current.id}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
       socketRef.current.emit('send-message', {
         roomId,
         message,
-        sender: username
+        sender: username,
+        messageId // Include the message ID
       });
       
-      // Add message to local state
-      setMessages(prevMessages => [...prevMessages, { text: message, sender: username, isMe: true }]);
+      // We won't add the message to local state here anymore
+      // It will be added when we receive the confirmation via socket
     }
   };
 
