@@ -36,9 +36,40 @@ const Room = () => {
 
     // Initialize socket connection
     const serverUrl = process.env.REACT_APP_SERVER_URL || window.location.origin;
+    console.log('Connecting to socket server at:', serverUrl);
+    
     socketRef.current = io.connect(serverUrl, {
       path: '/socket.io',
-      transports: ['websocket', 'polling']
+      transports: ['websocket', 'polling'],
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000
+    });
+    
+    // Handle socket connection events
+    socketRef.current.on('connect', () => {
+      console.log('Connected to socket server with ID:', socketRef.current.id);
+    });
+    
+    socketRef.current.on('connect_error', (error) => {
+      console.error('Socket connection error:', error);
+    });
+    
+    socketRef.current.on('connect_timeout', () => {
+      console.error('Socket connection timeout');
+    });
+    
+    socketRef.current.on('reconnect', (attemptNumber) => {
+      console.log(`Reconnected to socket server after ${attemptNumber} attempts`);
+    });
+    
+    socketRef.current.on('reconnect_error', (error) => {
+      console.error('Socket reconnection error:', error);
+    });
+    
+    socketRef.current.on('reconnect_failed', () => {
+      console.error('Socket reconnection failed');
     });
     
     console.log('Connecting to socket server at:', serverUrl);
@@ -79,11 +110,88 @@ const Room = () => {
 
         // Handle incoming signals
         socketRef.current.on('signal', ({ from, signal }) => {
-          console.log('Received signal from:', from);
+          console.log('Received direct signal from:', from);
           const item = peersRef.current.find(p => p.peerId === from);
           if (item) {
-            item.peer.signal(signal);
+            try {
+              item.peer.signal(signal);
+            } catch (err) {
+              console.error('Error processing signal:', err);
+            }
+          } else {
+            console.log('Creating new peer from signal');
+            // Create a new peer if it doesn't exist yet
+            const peer = addPeer(signal, from, stream);
+            peersRef.current.push({
+              peerId: from,
+              peer,
+              username: 'User' // We don't know the username yet
+            });
+
+            setPeers(prevPeers => [...prevPeers, {
+              peerId: from,
+              peer,
+              username: 'User'
+            }]);
           }
+        });
+        
+        // Also handle broadcast signals as fallback
+        socketRef.current.on('signal-broadcast', ({ from, signal }) => {
+          console.log('Received broadcast signal from:', from);
+          // Skip if it's from ourselves
+          if (from === userId.current) return;
+          
+          const item = peersRef.current.find(p => p.peerId === from);
+          if (item) {
+            try {
+              item.peer.signal(signal);
+            } catch (err) {
+              console.error('Error processing broadcast signal:', err);
+            }
+          }
+        });
+        
+        // Handle ICE candidates
+        socketRef.current.on('ice-candidate', ({ from, candidate }) => {
+          console.log('Received ICE candidate from:', from);
+          const item = peersRef.current.find(p => p.peerId === from);
+          if (item && item.peer) {
+            try {
+              item.peer.signal({ type: 'candidate', candidate });
+            } catch (err) {
+              console.error('Error adding ICE candidate:', err);
+            }
+          }
+        });
+        
+        // Also handle broadcast ICE candidates as fallback
+        socketRef.current.on('ice-candidate-broadcast', ({ from, candidate }) => {
+          console.log('Received broadcast ICE candidate from:', from);
+          // Skip if it's from ourselves
+          if (from === userId.current) return;
+          
+          const item = peersRef.current.find(p => p.peerId === from);
+          if (item && item.peer) {
+            try {
+              item.peer.signal({ type: 'candidate', candidate });
+            } catch (err) {
+              console.error('Error adding broadcast ICE candidate:', err);
+            }
+          }
+        });
+        
+        // Handle connection testing
+        socketRef.current.on('user-ping', ({ from }) => {
+          console.log('Received ping from:', from);
+          socketRef.current.emit('pong-user', {
+            roomId,
+            to: from
+          });
+        });
+        
+        socketRef.current.on('user-pong', ({ from }) => {
+          console.log('Received pong from:', from);
         });
 
         // Handle users disconnecting
@@ -122,8 +230,44 @@ const Room = () => {
         });
 
         // Handle incoming chat messages
-        socketRef.current.on('new-message', ({ message, sender }) => {
-          setMessages(prevMessages => [...prevMessages, { text: message, sender, isMe: sender === username }]);
+        socketRef.current.on('new-message', ({ message, sender, timestamp }) => {
+          console.log(`Received chat message from ${sender}: ${message.substring(0, 20)}${message.length > 20 ? '...' : ''}`);
+          setMessages(prevMessages => {
+            // Check if we already have this message (to avoid duplicates)
+            const isDuplicate = prevMessages.some(msg => 
+              msg.sender === sender && 
+              msg.text === message && 
+              (msg.timestamp === timestamp || Math.abs(msg.timestamp - timestamp) < 1000)
+            );
+            
+            if (isDuplicate) {
+              return prevMessages;
+            }
+            
+            return [...prevMessages, { 
+              text: message, 
+              sender, 
+              isMe: sender === username,
+              timestamp: timestamp || Date.now()
+            }];
+          });
+        });
+        
+        // Request message history when joining a room
+        socketRef.current.emit('get-message-history', { roomId });
+        
+        // Handle message history
+        socketRef.current.on('message-history', ({ messages: historyMessages }) => {
+          console.log(`Received message history with ${historyMessages.length} messages`);
+          
+          if (historyMessages && historyMessages.length > 0) {
+            setMessages(historyMessages.map(msg => ({
+              text: msg.message,
+              sender: msg.sender,
+              isMe: msg.sender === username,
+              timestamp: msg.timestamp
+            })));
+          }
         });
       })
       .catch(error => {
@@ -149,6 +293,9 @@ const Room = () => {
 
   // Function to create a peer
   const createPeer = (userToSignal, callerID, stream) => {
+    console.log(`Creating peer connection to ${userToSignal}`);
+    
+    // Use public STUN servers and free TURN servers
     const peer = new Peer({
       initiator: true,
       trickle: true, // Enable trickle ICE for better connectivity
@@ -158,6 +305,14 @@ const Room = () => {
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
           { urls: 'stun:stun2.l.google.com:19302' },
+          { urls: 'stun:stun3.l.google.com:19302' },
+          { urls: 'stun:stun4.l.google.com:19302' },
+          // Free TURN server from Twilio (you would normally implement your own TURN server or use a service)
+          {
+            urls: 'turn:global.turn.twilio.com:3478?transport=udp',
+            username: 'f4b4035eaa76f4a55de5f4351567653ee4ff6fa97b50b6b334fcc1be9c27212d',
+            credential: 'w1uxM55V9yVoqyVFjt+mxDBV0F87AUCemaYVQGxsPLw='
+          }
         ]
       }
     });
@@ -185,6 +340,9 @@ const Room = () => {
 
   // Function to handle a received signal
   const addPeer = (incomingSignal, callerID, stream) => {
+    console.log(`Adding peer connection from ${callerID}`);
+    
+    // Use public STUN servers and free TURN servers
     const peer = new Peer({
       initiator: false,
       trickle: true, // Enable trickle ICE for better connectivity
@@ -194,6 +352,14 @@ const Room = () => {
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
           { urls: 'stun:stun2.l.google.com:19302' },
+          { urls: 'stun:stun3.l.google.com:19302' },
+          { urls: 'stun:stun4.l.google.com:19302' },
+          // Free TURN server from Twilio (you would normally implement your own TURN server or use a service)
+          {
+            urls: 'turn:global.turn.twilio.com:3478?transport=udp',
+            username: 'f4b4035eaa76f4a55de5f4351567653ee4ff6fa97b50b6b334fcc1be9c27212d',
+            credential: 'w1uxM55V9yVoqyVFjt+mxDBV0F87AUCemaYVQGxsPLw='
+          }
         ]
       }
     });
@@ -361,7 +527,7 @@ const Video = ({ peer, username }) => {
 
   return (
     <div className="video-item">
-      <video ref={ref} autoPlay playsInline />
+      <video ref={ref} autoPlay playsInline controls />
       <div className="user-name">{username}</div>
     </div>
   );

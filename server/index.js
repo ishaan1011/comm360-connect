@@ -21,8 +21,11 @@ app.use(express.json());
 const io = socketIo(server, {
   cors: {
     origin: '*',
-    methods: ['GET', 'POST']
-  }
+    methods: ['GET', 'POST'],
+    credentials: true
+  },
+  // Allow long-polling to fall back if websockets don't work
+  transports: ['websocket', 'polling']
 });
 
 // Store active rooms
@@ -38,7 +41,11 @@ io.on('connection', (socket) => {
     
     // Create room if it doesn't exist
     if (!activeRooms[roomId]) {
-      activeRooms[roomId] = { participants: [] };
+      activeRooms[roomId] = { 
+        participants: [],
+        messages: [],
+        created: Date.now()
+      };
     }
     
     // Add user to room
@@ -80,19 +87,67 @@ io.on('connection', (socket) => {
 
   // Handle WebRTC signaling
   socket.on('signal', ({ roomId, to, from, signal }) => {
-    console.log(`Signal from ${from} to ${to}`);
-    io.to(to).emit('signal', { from, signal });
+    console.log(`Signal from ${from} to ${to} in room ${roomId}`);
+    // Try both direct socket ID and room-based routing
+    if (to) {
+      io.to(to).emit('signal', { from, signal });
+    }
+    
+    // Also broadcast to the room except the sender as a backup strategy
+    socket.to(roomId).emit('signal-broadcast', { from, signal });
   });
   
   // Handle ICE candidates
   socket.on('ice-candidate', ({ roomId, to, candidate }) => {
-    console.log(`ICE candidate for room ${roomId}`);
-    io.to(to).emit('ice-candidate', { from: socket.id, candidate });
+    console.log(`ICE candidate from ${socket.id} to ${to} in room ${roomId}`);
+    // Try both direct socket ID and room-based routing
+    if (to) {
+      io.to(to).emit('ice-candidate', { from: socket.id, candidate });
+    }
+    
+    // Also broadcast to the room except the sender as a backup strategy
+    socket.to(roomId).emit('ice-candidate-broadcast', { from: socket.id, candidate });
+  });
+  
+  // Handle connection testing
+  socket.on('ping-user', ({ roomId, to }) => {
+    console.log(`Ping from ${socket.id} to ${to} in room ${roomId}`);
+    io.to(to).emit('user-ping', { from: socket.id });
+  });
+  
+  socket.on('pong-user', ({ roomId, to }) => {
+    console.log(`Pong from ${socket.id} to ${to} in room ${roomId}`);
+    io.to(to).emit('user-pong', { from: socket.id });
   });
 
   // Handle chat messages
   socket.on('send-message', ({ roomId, message, sender }) => {
-    io.to(roomId).emit('new-message', { message, sender });
+    console.log(`Chat message in room ${roomId} from ${sender}: ${message.substring(0, 20)}${message.length > 20 ? '...' : ''}`);
+    
+    // Send to all clients in the room, including sender for confirmation
+    io.in(roomId).emit('new-message', { message, sender, timestamp: Date.now() });
+    
+    // Store message in room history for late joiners
+    if (!activeRooms[roomId].messages) {
+      activeRooms[roomId].messages = [];
+    }
+    
+    // Keep only last 100 messages
+    if (activeRooms[roomId].messages.length >= 100) {
+      activeRooms[roomId].messages.shift();
+    }
+    
+    activeRooms[roomId].messages.push({ message, sender, timestamp: Date.now() });
+  });
+  
+  // Send message history to newly joined users
+  socket.on('get-message-history', ({ roomId }) => {
+    console.log(`Message history requested for room ${roomId}`);
+    if (activeRooms[roomId] && activeRooms[roomId].messages) {
+      socket.emit('message-history', { messages: activeRooms[roomId].messages });
+    } else {
+      socket.emit('message-history', { messages: [] });
+    }
   });
 });
 
