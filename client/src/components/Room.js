@@ -632,24 +632,40 @@ const Video = ({ peer, username }) => {
 
   useEffect(() => {
     peer.on('stream', stream => {
-      console.log('Received stream from peer');
+      console.log('✅ Received stream from peer:', stream);
       if (ref.current) {
         ref.current.srcObject = stream;
+        ref.current.muted = false;
+        ref.current.volume = 1;
       }
     });
-    
+  
+    peer.on('track', (track, stream) => {
+      console.log(`🔁 Track received from peer: ${track.kind}`, track);
+    });
+  
     peer.on('error', err => {
       console.error('Peer connection error:', err);
     });
-    
+  
     peer.on('close', () => {
       console.log('Peer connection closed');
     });
-  }, [peer]);
+  }, [peer]);  
 
   return (
     <div className="video-item">
-      <video ref={ref} autoPlay playsInline />
+      <video
+        ref={ref}
+        autoPlay
+        playsInline
+        onLoadedMetadata={() => {
+          console.log("🎥 Remote video is ready to play");
+          ref.current?.play().catch((e) => console.error("Play error:", e));
+        }}
+        style={{ backgroundColor: "black", width: "100%", maxHeight: "50vh" }}
+      />
+
       <div className="user-name">{username}</div>
     </div>
   );
