@@ -69,6 +69,31 @@ const Room = () => {
         }
       });
 
+      socketRef.current.on('ice-candidate', ({ from, candidate }) => {
+        console.log('🔥 Received ICE candidate from', from);
+        const peerObj = peersRef.current.find(p => p.peerId === from);
+        if (peerObj && peerObj.peer) {
+          try {
+            peerObj.peer.signal({ type: 'candidate', candidate });
+          } catch (err) {
+            console.error('Error adding ICE candidate:', err);
+          }
+        }
+      });
+      
+      socketRef.current.on('ice-candidate-broadcast', ({ from, candidate }) => {
+        if (from === userId.current) return;
+        console.log('📡 Broadcast ICE candidate from', from);
+        const peerObj = peersRef.current.find(p => p.peerId === from);
+        if (peerObj && peerObj.peer) {
+          try {
+            peerObj.peer.signal({ type: 'candidate', candidate });
+          } catch (err) {
+            console.error('Error adding broadcast ICE candidate:', err);
+          }
+        }
+      });
+
       socketRef.current.on('user-disconnected', ({ userId }) => {
         const peerObj = peersRef.current.find(p => p.peerId === userId);
         if (peerObj) peerObj.peer.destroy();
@@ -112,8 +137,15 @@ const Room = () => {
       trickle: true,
       stream,
       config: {
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-      }
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          {
+            urls: 'turn:relay.metered.ca:443',
+            username: 'f570aa13f1f8e73aa00c77f8',
+            credential: 'aXd8V2yT6rU0lPhR'
+          }
+        ]
+      }      
     });
     peer.on('signal', signal => {
       socketRef.current.emit('signal', {
