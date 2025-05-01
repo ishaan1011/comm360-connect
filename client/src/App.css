@@ -22,7 +22,7 @@ body {
 }
 
 .navbar {
-  background-color: #2d8cff !important;
+  background-color: #34a853 !important;
   padding: 12px 20px;
 }
 
@@ -44,7 +44,7 @@ body {
 
 .home-title {
   margin-bottom: 20px;
-  color: #2d8cff;
+  color: #34a853;
 }
 
 .home-buttons {
@@ -56,8 +56,8 @@ body {
 }
 
 .btn-primary {
-  background-color: #2d8cff;
-  border-color: #2d8cff;
+  background-color: #34a853;
+  border-color: #34a853;
 }
 
 .btn-primary:hover {
@@ -89,7 +89,7 @@ body {
 .copy-btn {
   background: none;
   border: none;
-  color: #2d8cff;
+  color: #34a853;
   cursor: pointer;
   padding: 5px;
   border-radius: 4px;
@@ -245,7 +245,7 @@ body {
 }
 
 .chat-input button {
-  background-color: #2d8cff;
+  background-color: #34a853;
   color: white;
   border: none;
   border-radius: 50%;
@@ -275,7 +275,7 @@ body {
 .copy-btn {
   background: none;
   border: none;
-  color: #2d8cff;
+  color: #34a853;
   cursor: pointer;
 }
 
